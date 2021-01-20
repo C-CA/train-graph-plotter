@@ -112,7 +112,7 @@ THE SOFTWARE.
 #%%
 #Import required packages.
 import tkinter as tk
-from tkinter import Label, Entry, Checkbutton, Button, messagebox, Frame, LabelFrame, DISABLED
+from tkinter import Label, Entry, Checkbutton, Button, messagebox, Frame, LabelFrame, DISABLED, filedialog
 import tkinter.ttk as ttk
 import re
 import xlwings as xw
@@ -132,9 +132,9 @@ import ctypes
 import sys
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-import tkinter.filedialog
 import base64
 import pdb
+from time import strptime, strftime
 #import pypdfocr.pypdfocr_gs as pdfImg
 #import glob
 #%%
@@ -222,8 +222,16 @@ def e(variable,bookname,sheetname): #"variable explorer"
 #cells = [cell contents],
 #indices = [cell addresses in the format 'r,c'], used later to point to an exact cell when generating errors
 #exceptions = [exceptions generated when reading each cell (only used when debugging)]    
+def stringtimehandler(input):
+    for format in ["%H:%M:%S","%H:%M","%d %H:%M","%d %H:%M:%S"]:
+        try:
+            return strftime('%H:%M:%S',strptime(input, format))
+        except ValueError:
+            pass
+    return ''
 
-def readexcel(bookname,sheetname,cell_range,only_times,as_string):                  
+def readexcel(bookname,sheetname,cell_range,only_times,as_string, debug = False): 
+                 
     wb = xw.Book(bookname)
     sheet = wb.sheets[sheetname]
     
@@ -238,28 +246,37 @@ def readexcel(bookname,sheetname,cell_range,only_times,as_string):
                           
     for r, row in enumerate(cells):                             #iterate through rows (enumerate returns index, value for each row)
         for c, cell in enumerate(row):                          #iterate through cells in the current row
-            indices[r][c] = '{},{}'.format(r+offset_r,c+offset_c) #populate address array
-            if cell is None:                                    #if blank cell
-                cells[r][c] = ''                                #set to empty string because TGP can't handle Nones
+            #if debug and cell == '17:48:00':
+            #    pdb.set_trace()
+            #FIXME: better type decision tree and sanity test with multiple sheets
+            if type(cell) == str and cell is not None and only_times:
+                #bazinga
+                cells[r][c] =stringtimehandler(cell)           
             else:
-                try:                                            #try to convert float (from excel) to TGP-readable time string
-                    value = xlrd.xldate_as_tuple(cell, 0)#note: last parameter = 'datemode', which doesn't matter in this case where we converting relative, not absolute, times
-                    value = '{}:{}:{}'.format(str(value[3]).zfill(2),str(value[4]).zfill(2),str(value[5]).zfill(2))#convert tuple to hh:mm:ss format
-                    cells[r][c] = value                         #place converted value in array
-                except Exception as e:                          #if not a time (when xldate_as_tuple conversion fails)
-                    exceptions[r][c] = (str(type(e).__name__)+':'+str(e)) #record exception
-                    if only_times:                              #when reading time matrix, 'clean' it up by deleting non-times, to be TGP-compatible
-                        cells[r][c] = ''                        #delete whatever non-time was in that cell                        
-                    else:                                       #when we want to just read and not clean
-                        if as_string:                           #when we want to read each non-time as a string (which we do, usually), particularly if any of said non-times consist of purely numbers
-                            cells[r][c] = str(cells[r][c])
-                        else:                                   #(usually not used): when we neither want to delete non-times nor convert to string
-                            pass                                #do nothing (leave cell as is). This else:pass is not strictly necessary, but is left in for clarity.
+                indices[r][c] = '{},{}'.format(r+offset_r,c+offset_c) #populate address array
+                if cell is None:                                    #if blank cell
+                    cells[r][c] = ''                                #set to empty string because TGP can't handle Nones
+                else:
+                    try:                                            #try to convert float (from excel) to TGP-readable time string
+                        value = xlrd.xldate_as_tuple(cell, 0)#note: last parameter = 'datemode', which doesn't matter in this case where we converting relative, not absolute, times
+                        value = '{}:{}:{}'.format(str(value[3]).zfill(2),str(value[4]).zfill(2),str(value[5]).zfill(2))#convert tuple to hh:mm:ss format
+                        cells[r][c] = value                         #place converted value in array
+                    except Exception as e:                          #if not a time (when xldate_as_tuple conversion fails)
+                        exceptions[r][c] = (str(type(e).__name__)+':'+str(e)) #record exception
+                        if only_times:                              #when reading time matrix, 'clean' it up by deleting non-times, to be TGP-compatible
+                            cells[r][c] = ''                        #delete whatever non-time was in that cell                        
+                        else:                                       #when we want to just read and not clean
+                            if as_string:                           #when we want to read each non-time as a string (which we do, usually), particularly if any of said non-times consist of purely numbers
+                                cells[r][c] = str(cells[r][c])
+                            else:                                   #(usually not used): when we neither want to delete non-times nor convert to string
+                                pass                                #do nothing (leave cell as is). This else:pass is not strictly necessary, but is left in for clarity.
 
     return cells, indices, exceptions
 
 #stitch(locations,trains,cells,arrival/departure labels,list of labels): format and stitch together seperately-read arrays into a format TGP can parse.
 
+#FIXME: option for user-defined distance column
+#FIXME: option for user-defined colour row
 def stitch(locations,trains,cells,arrdep,label_list):                                             
     #Create a colour row, auto-assigning colours to trains. Note: trains with identical names are assigned the same colour.
     for i, train in enumerate(trains[0]):
@@ -323,7 +340,7 @@ def stitch(locations,trains,cells,arrdep,label_list):
     output_intermediate[output.shape[0]+1:,0:3] = output[:,0:3]                        #'paste' the dummy train (which is just a copy of the first non-empty Up train) into the bottom half of the new array, along with the same locations and distances
     output = output_intermediate
     
-    return output, max_dist
+    return output, max_dist, cells
 
 def exceladdressof(cell):
     return sheet.range(tuple([int(i) for i in re.findall('([0-9]+),([0-9]+)',cell)[0]])).get_address(False,False)
@@ -332,7 +349,7 @@ def exceladdressof(cell):
 class GUI:
     def __init__(self, master):
         self.master = master
-        master.title("Train Graph Plotter v2.0 (alpha build NOV18b)")
+        master.title("Train Graph Plotter v2.0 (alpha build JAN20)")
         master.geometry('690x530')
         master.resizable(False,False)
         master.iconbitmap(tempfile)
@@ -433,7 +450,7 @@ class GUI:
         self.l4=Label(self.outputframe, text= "Output file name").grid(row=0,column=0,sticky = 'w',padx = (15,0),pady = (10,0))
         self.l5=Label(master, text= "File format:", font="Helvetica 8 bold")#.grid(row=4)
         
-        self.warninglabel=Label(master, text= "Warning: Alpha build. Copy any files before using!                                         Problems? E-mail thariq.fahry@networkrail.co.uk", font="Helvetica 8 bold").grid(row=3,sticky = 'NW',padx = (8,0),pady=(0,0),columnspan=3,rowspan=2)
+        self.warninglabel=Label(master, text= "Alpha version. Please copy any files before using!                                         ", font="Helvetica 8 bold").grid(row=3,sticky = 'NW',padx = (8,0),pady=(0,0),columnspan=3,rowspan=2)
         
         #Define checkbutton variables.
         self.check1var = tk.BooleanVar()
@@ -512,41 +529,47 @@ class GUI:
         self.e1.grid(row=0, column=0,columnspan=3,sticky='w',padx=(75,0),pady=(10,0))
         
         self.infilename=tk.StringVar()
-        self.e2=Entry(self.fileframe, textvariable=self.infilename, width=38)
+        self.e2=Entry(self.fileframe, textvariable=self.infilename, width=24)
         if 'infilename_save' in locals():
             self.e2.insert(0, infilename_save)
         self.e2.grid(row=1, column=0,columnspan=3,sticky='w',padx=(75,0),pady=(10,0))
+        
+        self.b1 =Button(self.fileframe, text="Browse...", command=self.selectfile, width=10, height = 1).grid(row=1, column = 1,padx=(0,0),pady=(10,0),columnspan=2, sticky ='e')
 
         self.outfilename=tk.StringVar()
         self.e3=Entry(self.outputframe, textvariable=self.outfilename, width=21)
         if 'outfilename_save' in locals():
             self.e3.insert(0, outfilename_save)
+        else:
+            self.e3.insert(0, 'image')
+        
         self.e3.grid(row=0, column=0,columnspan=3,sticky='w',padx=(115,0),pady=(10,0))
-
-
-#        self.sheetname=tk.StringVar()
-#        self.e24=Entry(self.sheetframe, textvariable=self.sheetname,width = 36)
-#        self.e24.delete(0, "end")
-#        if 'sheetname_save' in locals():
-#            self.e24.insert(0, sheetname_save)
-#        else:
-#            self.e24.insert(0, 'UP Peak 12tph')
-#        self.e24.grid(row=0, column=0,columnspan = 2,sticky = 'w',padx = (87,0),pady=(10,0))
-
-
-
-
+        
+        
+        
         self.min_time=tk.StringVar()
         self.e4=Entry(self.optionframe, textvariable=self.min_time,width = 8)
         if 'min_time_save' in locals():
             self.e4.insert(0, min_time_save)
+        else:
+            self.focusout(self.e4)
         self.e4.grid(row=0, column=1,sticky = 'w',pady = (10,0))
 
         self.max_time=tk.StringVar()
         self.e5=Entry(self.optionframe, textvariable=self.max_time,width = 8)
         if 'max_time_save' in locals():
             self.e5.insert(0, max_time_save)
+        else:
+            self.focusout(self.e5)
         self.e5.grid(row=0, column=3,sticky = 'w',pady = (10,0))
+        
+        self.e4.bind('<FocusIn>', lambda fi, caller = self.e4: self.focusin(caller))
+        self.e5.bind('<FocusIn>', lambda fi, caller = self.e5: self.focusin(caller))
+        
+        self.e4.bind('<FocusOut>', lambda fi, caller = self.e4: self.focusout(caller))
+        self.e5.bind('<FocusOut>', lambda fi, caller = self.e5: self.focusout(caller))
+        
+
         
         
 
@@ -745,7 +768,7 @@ class GUI:
             self.e23.insert(0, 'V58')
         self.e23.grid(row=4, column=3,sticky = 'w',pady = (0,0))
         
-        
+        #FIXME: dropdown won't be populated on fresh start of TGP. Populate using 'Generate' button too.
         self.sheetname=tk.StringVar()
         self.e24=Entry(self.sheetframe, textvariable=self.sheetname,width = 36)
         self.e24.delete(0, "end")
@@ -753,8 +776,13 @@ class GUI:
             self.e24.insert(0, sheetname_save)
         else:
             self.e24.insert(0, 'UP Scenario 10')
-        self.e24.grid(row=0, column=0,columnspan = 2,sticky = 'w',padx = (87,0),pady=(10,0))
+        #self.e24.grid(row=0, column=0,columnspan = 2,sticky = 'w',padx = (87,0),pady=(10,0))
         
+        self.combovalues = [] #initialise empty value list for combobox
+        self.dd1 = ttk.Combobox(self.sheetframe, width = 33, values =self.combovalues, postcommand = lambda:self.dd1.configure(values = self.combovalues) )
+        if 'sheetname_save' in locals():
+            self.dd1.insert(0, sheetname_save)
+        self.dd1.grid(row=0, column=0,columnspan = 2,sticky = 'w',padx = (87,0),pady=(10,0))
 
 ###########################################################################        
 
@@ -762,6 +790,8 @@ class GUI:
         if "preview_save" in locals():
             if preview_save == 'True':
                 self.check4.select()
+        else:
+            self.check4.select()
         self.check4.grid(row=1,column=0,sticky='w',padx=(246,0),pady=(0,0))
         
         #Create list of entries and checkbuttons
@@ -769,17 +799,46 @@ class GUI:
         self.entry_value_list = [self.directory, self.infilename, self.outfilename, self.min_time, self.max_time, self.l, self.r, self.t, self.b, self.legend_position, self.ncols, self.size_x, self.size_y]
         self.check_list = [self.check1, self.check2, self.check3, self.check4, self.check5]
         
-        #Add buttons at the end.
+        #Add buttons at the end..
         self.b1 =Button(self.outputframe, text="Generate!", command=self.runcmd,width=10, height = 1).grid(row=0,padx=(250,0),pady=(10,0),columnspan=2)
         self.b2=Button(master, text="Quit", command=self.cancelcmd)#.grid(row=30, column=1) 
         self.b3=Button(self.optionframe, text="Clear", command=self.clearcmd)#.grid(row=2,column=1,rowspan=10)
+        #FIXME: 'save options' button
         self.b4=Button(self.optionframe, text="Reset options", command=self.defaultscmd).grid(row=28, column=1,columnspan=3,padx=(110,0))
+        
         
         #Stop program if x button pressed.
         master.protocol('WM_DELETE_WINDOW', self.xwindow)         
     
-    
+    def selectfile(self):
+        #FIXME: cannot open active files
+        self.browsedpath = filedialog.askopenfilename(initialdir = self.directory.get(), title = "Select input data", filetypes = [("All files","*.*")] )
+        self.browseddir, self.browsedfile = os.path.split(self.browsedpath)
         
+        if self.browseddir != '':
+            self.e1.delete(0,'end')
+            self.e1.insert(0, self.browseddir)
+        
+        if self.browsedfile != '':
+            self.e2.delete(0,'end')
+            self.e2.insert(0, self.browsedfile)
+            
+            wb = xw.Book(self.browsedpath)
+            self.combovalues = [i.name for i in wb.sheets]
+            self.dd1.delete(0,'end')
+            self.dd1.insert(0,self.combovalues[0])
+        
+    def focusin(self, caller):
+        if caller.get() == "auto":
+            caller.delete(0, 'end')
+            caller.config(fg='black')
+
+    def focusout(self, caller):
+        if caller.get() == "":
+            caller.delete(0, 'end')
+            caller.config(fg='grey')
+            caller.insert(0, "auto")
+            
     #Define command for OK button.    
     def runcmd(self):
         print("\n*******************************************************************************")
@@ -794,12 +853,12 @@ class GUI:
             if not self.entry_list[i].get():
                 errmsg1.append('error')
         if len(errmsg1) != 0:
-            messagebox.showerror("Error", "All entries must be filled.")
+            messagebox.showwarning("Error", "Please fill all required fields.")
             #all_errmsg.append('error')
             return
             
         if self.check1var.get() == False and self.check2var.get()==False:
-            messagebox.showerror("Error", "No file format selected.")
+            messagebox.showwarning("Error", "No file format selected.")
             #all_errmsg.append('error')
             return
         '''No longer needed.
@@ -825,7 +884,7 @@ class GUI:
                 if position_list[i].get() < 0.0 or position_list[i].get() > 1.0:
                     errmsg2.append('error')
             except tk.TclError:
-                messagebox.showerror("Error",position_name_list[i]+" position must be a number.")
+                messagebox.showwarning("Error",position_name_list[i]+" position must be a number.")
                 return
         #pattern = re.compile("^([0-9][0-9]:[0-9][0-9]:[0-9][0-9]*)")
         #if not pattern.match(self.e4.get()) or not pattern.match(self.e5.get()):
@@ -833,7 +892,7 @@ class GUI:
             #all_errmsg.append('error')
             #return
         if len(errmsg2) != 0:
-            messagebox.showerror("Error", "All positions must be between 0 and 1.")
+            messagebox.showwarning("Error", "All positions must be between 0 and 1.")
             #all_errmsg.append('error')
             return
         #if len(all_errmsg) == 0:
@@ -853,25 +912,31 @@ class GUI:
         train_row =         my_gui.train_row.get()
         time_cell_start =   my_gui.time_cell_start.get()
         time_cell_end =     my_gui.time_cell_end.get()
-        sheetname =         my_gui.sheetname.get()
+        sheetname =         my_gui.dd1.get()
         
+        if not my_gui.min_time.get() == 'auto' or my_gui.min_time.get() == '':
+            try:
+                min_time=dt.datetime.strptime(my_gui.min_time.get(),"%H:%M:%S")
+            except ValueError:
+                try:
+                    min_time=dt.datetime.strptime(my_gui.min_time.get(),"%d %H:%M:%S")
+                except ValueError:
+                    messagebox.showwarning("Error", "Time must be in hh:mm:ss or d hh:mm:ss format.")
+                    return
+        else:
+            min_time = 'auto'
         
-        try:
-            min_time=dt.datetime.strptime(my_gui.min_time.get(),"%H:%M:%S")
-        except ValueError:
+        if not my_gui.max_time.get() == 'auto' or my_gui.max_time.get() == '':
             try:
-                min_time=dt.datetime.strptime(my_gui.min_time.get(),"%d %H:%M:%S")
+                max_time=dt.datetime.strptime(my_gui.max_time.get(),"%H:%M:%S")
             except ValueError:
-                messagebox.showerror("Error", "Time must be in hh:mm:ss or d hh:mm:ss format.")
-                return
-        try:
-            max_time=dt.datetime.strptime(my_gui.max_time.get(),"%H:%M:%S")
-        except ValueError:
-            try:
-                max_time=dt.datetime.strptime(my_gui.max_time.get(),"%d %H:%M:%S")
-            except ValueError:
-                messagebox.showerror("Error", "Time must be in hh:mm:ss or d hh:mm:ss format.")
-                return
+                try:
+                    max_time=dt.datetime.strptime(my_gui.max_time.get(),"%d %H:%M:%S")
+                except ValueError:
+                    messagebox.showwarning("Error", "Time must be in hh:mm:ss or d hh:mm:ss format.")
+                    return
+        else:
+            max_time = 'auto'
 #        try: #TGP2 removed and replaced with auto dist inside stitch()
 #            min_dist=my_gui.min_dist.get()
 #        except (ValueError, tk.TclError):
@@ -886,26 +951,26 @@ class GUI:
         try:    
             label_freq=my_gui.label_freq.get()
         except (ValueError, tk.TclError):
-            messagebox.showerror("Error","Label frequency must be a number.")
+            messagebox.showwarning("Error","Label frequency must be a number.")
             return
         
         if label_freq < 1:
-            messagebox.showerror("Error","Label frequency must be greater than 0.")
+            messagebox.showwarning("Error","Label frequency must be greater than 0.")
             return
             
         if (60%label_freq != 0) and (label_freq%60 != 0):
-            messagebox.showerror("Error","Label frequency must be divisible by or a multiple of 60.")
+            messagebox.showwarning("Error","Label frequency must be divisible by or a multiple of 60.")
             return
         
         if gridlines == True:
             try:    
                 grid_freq=my_gui.grid_freq.get()
             except (ValueError, tk.TclError):
-                messagebox.showerror("Error","Gridlines frequency must be a number.")
+                messagebox.showwarning("Error","Gridlines frequency must be a number.")
                 return
             
             if grid_freq <= 0:
-                messagebox.showerror("Error","Gridline frequency must be greater than 0.")
+                messagebox.showwarning("Error","Gridline frequency must be greater than 0.")
                 return
         else:
             grid_freq = ''
@@ -919,22 +984,22 @@ class GUI:
         try:
             legend_position=my_gui.legend_position.get()
         except (tk.TclError, ValueError):
-            messagebox.showerror("Error","Legend position must be a number.")
+            messagebox.showwarning("Error","Legend position must be a number.")
             return
         try:
             ncols=my_gui.ncols.get()
         except (tk.TclError, ValueError):
-            messagebox.showerror("Error","Number of columns must be an integer.")
+            messagebox.showwarning("Error","Number of columns must be an integer.")
             return
         try:
             size_x=my_gui.size_x.get()
         except (tk.TclError, ValueError):
-            messagebox.showerror("Error","Horizontal size must be a number.")
+            messagebox.showwarning("Error","Horizontal size must be a number.")
             return
         try:
             size_y=my_gui.size_y.get()
         except (tk.TclError, ValueError):
-            messagebox.showerror("Error","Vertical size must be a number.")
+            messagebox.showwarning("Error","Vertical size must be a number.")
             return
             
         preview=my_gui.check4var.get()
@@ -943,11 +1008,11 @@ class GUI:
         directory=directory.replace('\\', '/')
         
         if os.path.exists(directory) == False:
-            messagebox.showerror("Error", "Directory not found.")
+            messagebox.showwarning("Error", "Directory not found.")
             return
         
         if os.path.isfile(directory+"/"+infilename) == False:
-            messagebox.showerror("Error", "Input file not found in directory")
+            messagebox.showwarning("Error", "Input file not found in directory")
             return        
         
         #Navigate to directory containing the input files.
@@ -969,21 +1034,28 @@ class GUI:
             arrdep, indices2 , exceptions2 = readexcel(infilename,sheetname,'{}{}:{}{}'.format(arrdep_column,minrow,arrdep_column,maxrow),False,True)
             trains, indices1, exceptions1 = readexcel(infilename,sheetname,'{}{}:{}{}'.format(mincol,train_row,maxcol,train_row),False,True)
             cells, z, exceptions0 = readexcel(infilename,sheetname,'{}{}:{}{}'.format(mincol,minrow,maxcol,maxrow),True,False) #read(cell_range, only_times, as_string)
-            
-            y, max_dist = stitch(locations,trains,cells,arrdep,arrdep_labels)
-            
+
+            y, max_dist, cells_for_minmax = stitch(locations,trains,cells,arrdep,arrdep_labels)
+
             max_dist = max_dist+1
             min_dist = 0
+            
+            #FIXME: make these auto populate the entries too
+            if max_time =='auto':
+                max_time = np.max(cells_for_minmax)
+                max_time = dt.datetime.strptime(max_time,"%H:%M:%S")
+                
+            if min_time =='auto':
+                min_time = np.min(np.where(cells_for_minmax=='','23:59:59',cells_for_minmax))
+                min_time = dt.datetime.strptime(min_time,"%H:%M:%S")
 
-            
-            
             ##############debug only###############
-            #e(y,'refdata.xlsx','VE slice1')
-            #e(exceptions0,'refdata.xlsx','exc')
+#            e(y,'refdata.xlsx','VE slice1')
+#            e(exceptions0,'refdata.xlsx','exc')
             #######################################
                         
-        except ValueError as error123:
-            messagebox.showerror("Error","ValueError raised. This should not usually happen; possible bug {} ".format(error123))
+        except Exception as error123:
+            messagebox.showwarning("Error","Error raised in main call.\n\nDescription: {} ".format(error123))
             return
         #Find split between up and down trains.
         n = np.shape(y)[0]
@@ -1006,7 +1078,7 @@ class GUI:
             n_directions = 1
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("Error", "No space between up and down trains. Graph cannot be produced.")
+            messagebox.showwarning("Error", "No space between up and down trains. Graph cannot be produced.")
             root.destroy()
             return
             #raise SystemExit
@@ -1137,7 +1209,7 @@ class GUI:
                 #if loc == "": 
                 #    loc = location1[i-1]
                 #messagebox.showerror("Error", "Incorrect distance format at "+loc+". Distance must be a number.")
-                messagebox.showerror("Error","Incorrect distance format in cell "+str(exceladdressof(z1[:,1][i]))+". Distance must be a number.")
+                messagebox.showwarning("Error","Incorrect distance format in cell "+str(exceladdressof(z1[:,1][i]))+". Distance must be a number.")
                 
                 return
                     
@@ -1147,12 +1219,12 @@ class GUI:
             for i in range(np.size(dist1)):
             	dist2.append(float(dist1[i]))          #dist2 contains the floats of distances
         except ValueError:
-            messagebox.showerror("Error","non-number in dist array not caught. This should not happen.")
+            messagebox.showwarning("Error","non-number in dist array not caught. This should not happen.")
             #messagebox.showerror("Error","Incorrect distance1 format in cell "+str(exceladdressof(z1[:,1][i]))+". Distance must be a number.")
             
         #Test for missing distances and locations.
         if len(location) > len(dist1):
-            messagebox.showerror("Error", "Missing distance.")
+            messagebox.showwarning("Error", "Missing distance.")
             return
          
         #Create arrays for train times.
@@ -1229,7 +1301,7 @@ class GUI:
                                 if loc == "": 
                                     loc = location1[i-1]
                                 #messagebox.showerror("Error", "Incorrect time format for train "+ str(j+1) + " at "+loc+". Time must be in hh:mm:ss or d hh:mm:ss format.")
-                                messagebox.showerror("Error","Incorrect time format in cell "+str(exceladdressof(z1[:,j+2][i])))
+                                messagebox.showwarning("Error","Incorrect time format in cell "+str(exceladdressof(z1[:,j+2][i])))
                                 return
         
         for j in range(n22):
@@ -1255,11 +1327,11 @@ class GUI:
                                 if loc == "": 
                                     loc = location2[i-1]
                                 
-                                messagebox.showerror("Error","Incorrect time format in cell "+str(exceladdressof(z2[:,j+2][i])))
+                                messagebox.showwarning("Error","Incorrect time format in cell "+str(exceladdressof(z2[:,j+2][i])))
                                 return
         #Combine up and down trains.
         if np.shape(list_times1)[1] != np.shape(list_times2)[1]:
-            messagebox.showerror("Error","Up and Down trains do not have the same number of locations or there are extra empty lines in your input file. Graph cannot be produced.")
+            messagebox.showwarning("Error","Up and Down trains do not have the same number of locations or there are extra empty lines in your input file. Graph cannot be produced.")
             return
         
         #TGP2: sections here commented out so that we plot only Up trains
@@ -1313,10 +1385,10 @@ class GUI:
         for j in range(n2):
             #Check colours and labels
             if labels[0][j] == '':
-                messagebox.showerror("Error", "No label found for train "+str(j+1)+".")
+                messagebox.showwarning("Error", "No label found for train "+str(j+1)+".")
                 return
             if (labels[1][j] not in matplotlib.colors.cnames) and (labels[1][j] not in ['w', 'k', 'r', 'b', 'y', 'g', 'm', 'c']):
-                messagebox.showerror("Error", " \"" + labels[1][j]+ "\" is not a valid colour for train "+str(j+1)+".")
+                messagebox.showwarning("Error", " \"" + labels[1][j]+ "\" is not a valid colour for train "+str(j+1)+".")
                 return
                 pass
             ax.plot(list_times[j][np.isfinite(list_times[j])], dist[np.isfinite(list_times[j])], color=labels[1][j], zorder=3)
@@ -1357,7 +1429,7 @@ class GUI:
         if n_labels < n_colours:
             messagebox.showwarning("Warning", "More colours than labels. Legend may not appear as expected.")
         if n_labels > n_colours:
-            messagebox.showerror("Error", "More labels than colours. Graph cannot be produced.")
+            messagebox.showwarning("Error", "More labels than colours. Graph cannot be produced.")
             return
             #raise SystemExit
             
@@ -1397,7 +1469,7 @@ class GUI:
                     try:
                         plt.savefig(outfilename+'.pdf')
                     except PermissionError:
-                        messagebox.showerror("Error","Output file is open. Close output file and try again.")
+                        messagebox.showwarning("Error","Output file is open. Close output file and try again.")
                         return
                     if png == False:
                         messagebox.showinfo("Graph produced", 'Graph has been written to '+outfilename+'.pdf'+' in '+directory+'.')
@@ -1405,7 +1477,7 @@ class GUI:
                     try:
                         plt.savefig(outfilename+'.png', dpi=600)
                     except PermissionError:
-                        messagebox.showerror("Error", "Output file is open. Close output file and try again.")
+                        messagebox.showwarning("Error", "Output file is open. Close output file and try again.")
                         return
                     if pdf == False:
                         messagebox.showinfo("Graph produced", 'Graph has been written to '+outfilename+'.png'+' in '+directory+'.')
@@ -1460,7 +1532,7 @@ class GUI:
             try:
                 canvas.show() #will be depreceated in the future, use draw() instead
             except RuntimeError:
-                messagebox.showerror("Error", "Graph contains too many tickmarks. Try increasing the label and gridline frequencies or reduce the size of the graph.")
+                messagebox.showwarning("Error", "Graph contains too many tickmarks. Try increasing the label and gridline frequencies or reduce the size of the graph.")
                 root2.destroy()
                 plt.close()
                 return
@@ -1486,10 +1558,10 @@ class GUI:
             try:
                 plt.savefig(outfilename+'.pdf')
             except PermissionError:
-                messagebox.showerror("Error","Output file is open. Close output file and try again.")
+                messagebox.showwarning("Error","Output file is open. Close output file and try again.")
                 return
             except RuntimeError:
-                messagebox.showerror("Error", "Graph contains too many tickmarks. Try increasing the label and gridline frequencies or reduce the size of the graph.")
+                messagebox.showwarning("Error", "Graph contains too many tickmarks. Try increasing the label and gridline frequencies or reduce the size of the graph.")
                 plt.close()
                 return
             if png == False:
@@ -1501,7 +1573,7 @@ class GUI:
             try:
                 plt.savefig(outfilename+'.png', dpi=600)
             except PermissionError:
-                messagebox.showerror("Error", "Output file is open. Close output file and try again.")
+                messagebox.showwarning("Error", "Output file is open. Close output file and try again.")
                 return
             if pdf == False:
                 root = tk.Tk()
@@ -1551,6 +1623,10 @@ class GUI:
             self.entry_list[i].delete(0, "end")
         for i in range(len(self.check_list)):
             self.check_list[i].deselect()
+            
+        self.focusout(self.e4)
+        self.focusout(self.e5)
+        self.e3.insert(0,'image')
         self.e8.insert(0, 0.14)
         self.e9.insert(0, 0.93)
         self.e10.insert(0, 0.91)
@@ -1568,6 +1644,7 @@ class GUI:
         self.e22.insert(0, 'C9')
         self.e23.insert(0, 'V58')
         self.check1.select()
+        self.check4.select()
     
     #Define command for closing window using X in top right hand corner.    
     def xwindow(self):
